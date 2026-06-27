@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配達マップアプリ</title>
+  <!-- LeafletのCSS -->
+  <link rel="stylesheet" href="https://unpkg.com" />
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      font-family: sans-serif;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+    /* エリア選択エリア */
+    #area-selector-container {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 8px 12px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    #area-select {
+      padding: 6px 12px;
+      font-size: 14px;
+      font-weight: bold;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+    .house-label {
+      font-weight: bold;
+      white-space: nowrap;
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid #333;
+      box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+      text-align: center;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    /* 未配送 */
+    .status-not-delivered {
+      background-color: #ffffff;
+      color: #333333;
+    }
+    /* 配送済み */
+    .status-delivered {
+      background-color: #28a745;
+      color: #ffffff;
+      border-color: #1e7e34;
+    }
+    /* ボタン共通スタイル */
+    .map-btn {
+      position: absolute;
+      bottom: 20px;
+      z-index: 1000;
+      padding: 10px 20px;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    }
+    /* 集計ボタン（左下） */
+    #count-btn {
+      left: 20px;
+      background-color: #007bff;
+    }
+    /* データリセットボタン（右下） */
+    #reset-btn {
+      right: 20px;
+      background-color: #dc3545;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- エリア選択メニュー -->
+  <div id="area-selector-container">
+    <label for="area-select" style="font-size: 12px; font-weight: bold; color: #555;">エリア:</label>
+    <select id="area-select">
+      <!-- 💡 管理したいエリアをここに並べるだけ（プログラムは自動追従します） -->
+      <option value="area_A.json">上飯田A地区</option>
+      <option value="area_B.json">下飯田B地区</option>
+    </select>
+  </div>
+
+  <div id="map"></div>
+  <button id="count-btn" class="map-btn">集　計</button>
+  <button id="reset-btn" class="map-btn">リセット</button>
+
+  <!-- LeafletのJavaScript -->
+  <script src="https://unpkg.com"></script>
+  
+  <script>
+    window.onerror = function(msg, url, line) {
+      alert("エラーが発生しました:\n" + msg + "\n行番号: " + line);
+      return false;
+    };
+
+    document.addEventListener("DOMContentLoaded", function() {
+      var map = L.map('map').setView([35.427031, 139.477060], 17);
+      var markerGroup = L.layerGroup().addTo(map); // マーカーを一括管理・消去するためのグループ
+      var deliveryPlaces = [];
+      var currentAreaFile = "";
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map);
+
+      // 💡 エリアデータを読み込んでマップを描画する関数
+      async function loadArea(jsonFileName) {
+        currentAreaFile = jsonFileName;
+        markerGroup.clearLayers(); // 古いピンを画面から消去
+        
+        // ストレージのキー名もエリアごとに分ける（例: delivery_map_data_area_A.json）
+        var storageKey = 'delivery_map_data_' + jsonFileName;
+        var savedData = localStorage.getItem(storageKey);
+        
+        try {
+          if (savedData && savedData.indexOf('[') !== -1) {
+            deliveryPlaces = JSON.parse(savedData);
+          } else {
+            throw new Error("初期化");
+          }
+        } catch (e) {
+          // ストレージにない場合は、外部JSONファイルをサーバーからダウンロード
+          try {
+            var response = await fetch(jsonFileName);
+            if (!response.ok) throw new Error("ファイルが見つかりません");
+            deliveryPlaces = await response.json();
+            localStorage.setItem(storageKey, JSON.stringify(deliveryPlaces));
+          } catch (fetchError) {
+            alert("データの読み込みに失敗しました:\n" + jsonFileName + "\n" + fetchError.message);
+            return;
+          }
+        }
+
+        // 地図の中心を、読み込んだデータの1件目の家に自動ジャンプ
+        if (deliveryPlaces.length > 0) {
+          map.setView([deliveryPlaces[0][2], deliveryPlaces[0][3]], 17);
+        }
+
+        // マーカーの配置
+        deliveryPlaces.forEach(function(place, index) {
+          var placeName = place[1];
+          var placeLat = place[2];
+          var placeLng = place[3];
+          var count = place[5];
+
+          var initialStatus = deliveryPlaces[index][4];
+          var statusClass = initialStatus ? 'status-delivered' : 'status-not-delivered';
+          var labelText = initialStatus ? '✓ ' + placeName + ' (' + count + ')' : placeName + ' (' + count + ')';
+
+          var customIcon = L.divIcon({
+            className: 'house-label ' + statusClass,
+            html: labelText,
+            iconSize: null
+          });
+
+          var marker = L.marker([placeLat, placeLng], { icon: customIcon }).addTo(markerGroup);
+
+          // タップ時の処理
+          marker.on('click', function() {
+            var currentStatus = !deliveryPlaces[index][4];
+            deliveryPlaces[index][4] = currentStatus;
+            localStorage.setItem(storageKey, JSON.stringify(deliveryPlaces));
+
+            var newClass = currentStatus ? 'status-delivered' : 'status-not-delivered';
+            var newText = currentStatus ? '✓ ' + placeName + ' (' + count + ')' : placeName + ' (' + count + ')';
+            
+            var newIcon = L.divIcon({
+              className: 'house-label ' + newClass,
+              html: newText,
+              iconSize: null
+            });
+            
+            marker.setIcon(newIcon);
+          });
+        });
+      }
+
+      // 最初（起動時）に選択されているエリアを読み込む
+      var areaSelect = document.getElementById('area-select');
+      loadArea(areaSelect.value);
+
+      // エリアが切り替えられた時のイベント
+      areaSelect.addEventListener('change', function() {
+        loadArea(this.value);
+      });
+
+      // 集計処理
+      document.getElementById('count-btn').addEventListener('click', function() {
+        var totalHouses = deliveryPlaces.length;
+        var deliveredHouses = 0;
+        var totalItems = 0;
+        var deliveredItems = 0;
+
+        for (var i = 0; i < totalHouses; i++) {
+          var houseCount = deliveryPlaces[i][5];
+          totalItems += houseCount;
+          if (deliveryPlaces[i][4] === true) {
+            deliveredHouses++;
+            deliveredItems += houseCount;
+          }
+        }
+        
+        var resultMessage = "【現在の配付集計結果】\n\n" +
+                            "■ 軒数ベース\n" +
+                            "・全体： " + totalHouses + " 軒\n" +
+                            "・配付済み： " + deliveredHouses + " 軒\n" +
+                            "・未配付： " + (totalHouses - deliveredHouses) + " 軒\n\n" +
+                            "■ 配布数ベース\n" +
+                            "・総配布予定数： " + totalItems + " 部\n" +
+                            "・実際に配付済： " + deliveredItems + " 部\n" +
+                            "・残りの配布数： " + (totalItems - deliveredItems) + " 部";
+
+        alert(resultMessage);
+      });
+
+      // リセット処理
+      document.getElementById('reset-btn').addEventListener('click', function() {
+        if (confirm('このエリアの配送状態を「未配送」にリセットしますか？')) {
+          var storageKey = 'delivery_map_data_' + currentAreaFile;
+          localStorage.removeItem(storageKey);
+          loadArea(currentAreaFile); // 再読み込みして初期化
+        }
+      });
+    });
+  </script>
+</body>
+</html>
