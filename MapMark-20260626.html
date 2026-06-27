@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配達マップアプリ</title>
+  <!-- LeafletのCSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+    .house-label {
+      font-weight: bold;
+      white-space: nowrap;
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid #333;
+      box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+      text-align: center;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    /* 未配送 */
+    .status-not-delivered {
+      background-color: #ffffff;
+      color: #333333;
+    }
+    /* 配送済み */
+    .status-delivered {
+      background-color: #28a745;
+      color: #ffffff;
+      border-color: #1e7e34;
+    }
+    /* データリセットボタン */
+    #reset-btn {
+      position: absolute;
+      bottom: 20px;
+      right: 20px; /* 💡左下ボタンとぶつからないよう右端から20pxの位置に固定 */
+/*
+      left: 50%;
+      transform: translateX(-50%);
+*/
+      z-index: 1000;
+      padding: 10px 20px;
+      background-color: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+  <button id="reset-btn">リセット</button> //すべての配送状態をリセット
+
+  <!-- LeafletのJavaScript -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <script>
+    // エラーが起きたら画面に詳細を出す
+    window.onerror = function(msg, url, line) {
+      alert("エラーが発生しました:\n" + msg + "\n行番号: " + line);
+      return false;
+    };
+
+    // 初期状態の配達先マスターデータ
+    var defaultPlaces = [
+      [1, '杉山', 35.42708374155615, 139.47693969227652, false,1],
+      [2, '熊谷', 35.427059699860486, 139.4770986131712, false,2],
+      [3, '佐藤', 35.42702636931586, 139.477229370861, false,1],
+      [4, '有我', 35.42700451321356, 139.47733934143477, false,3],
+      [5, '武田', 35.426981017896985, 139.47740706721493, false,1],
+      [6, 'どんぐり', 35.42703128693812, 139.47673986770195, false,5]
+    ];
+
+    document.addEventListener("DOMContentLoaded", function() {
+      
+      // 1. データの安全な読み込み
+      var deliveryPlaces = [];
+      var savedData = localStorage.getItem('delivery_map_data');
+      
+      try {
+        // カンマ区切りの配列形式なので、チェック処理を[ ]に対応
+        if (savedData && savedData.indexOf('[') !== -1) {
+          deliveryPlaces = JSON.parse(savedData);
+        } else {
+          throw new Error("初期化が必要です");
+        }
+      } catch (e) {
+        //データをここで一回完全に強制消去
+        localStorage.removeItem('delivery_map_data');
+        deliveryPlaces = JSON.parse(JSON.stringify(defaultPlaces));
+      }
+
+      // 2. マップの初期化
+      var map = L.map('map').setView([35.426031, 139.476560], 17); // 上飯田C
+
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map);
+
+      // マーカーの配置
+      deliveryPlaces.forEach(function(place,index) {
+
+        var isDelivered = place[4]; // 配送ステータス
+        var placeName = place[1];   // 名前
+        var placeLat = place[2];    // 緯度
+        var placeLng = place[3];    // 経度
+        var count = place[5];       // 配布数
+
+        var statusClass = isDelivered ? 'status-delivered' : 'status-not-delivered';
+
+        // マップ上の文字にも「杉山 (1)」のように配布数が分かるように表示
+        var labelText = isDelivered ? '✓ ' + placeName + ' (' + count + ')' : placeName + ' (' + count + ')';
+
+        var customIcon = L.divIcon({
+          className: 'house-label ' + statusClass,
+          html: labelText,
+          iconSize: null
+        });
+
+        var marker = L.marker([placeLat, placeLng], { icon: customIcon }).addTo(map);
+
+        // タップした時の色・文字切り替え
+        marker.on('click', function() {
+          // 1. 現在のステータスを反転させて、データ（配列）を更新する
+          var currentStatus = !deliveryPlaces[index][4];
+          deliveryPlaces[index][4] = currentStatus;
+            
+          // 2. ローカルストレージに保存する
+          localStorage.setItem('delivery_map_data', JSON.stringify(deliveryPlaces));
+
+          // 3. 反転後の最新ステータス（currentStatus）を基に、見た目（クラスと文字）を決める
+          var newClass = currentStatus ? 'status-delivered' : 'status-not-delivered';
+          var newText = currentStatus ? '✓ ' + placeName + ' (' + count + ')' : placeName + ' (' + count + ')';
+          
+          // 4. マーカーのアイコンを更新する
+          var newIcon = L.divIcon({
+            className: 'house-label ' + newClass,
+            html: newText,
+            iconSize: null
+          });
+          
+          marker.setIcon(newIcon);        });
+      });
+
+      // リセットボタンを押した時の処理
+      document.getElementById('reset-btn').addEventListener('click', function() {
+        if (confirm('すべての配送状態を「未配送」にリセットしますか？')) {
+          localStorage.removeItem('delivery_map_data');
+          location.reload();
+        }
+      });
+//--------------------------------------------------------------
+  // 集計ボタンをプログラムで自動作成して処理する
+      var countBtn = document.createElement('button');
+      countBtn.innerHTML = '集　計4'; //現在の配付状態を集計
+      countBtn.style.position = 'absolute';
+      countBtn.style.bottom = '20px';
+      countBtn.style.left = '20px'; // 画面の左下に配置
+      countBtn.style.zIndex = '1000';
+      countBtn.style.padding = '10px 20px';
+      countBtn.style.backgroundColor = '#007bff'; // 青色のボタン
+      countBtn.style.color = 'white';
+      countBtn.style.border = 'none';
+      countBtn.style.borderRadius = '5px';
+      countBtn.style.fontWeight = 'bold';
+      countBtn.style.cursor = 'pointer';
+      countBtn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.3)';
+      document.body.appendChild(countBtn);
+//--------------------------------------------------------------
+     // 集計ボタンをクリックした時の処理
+      countBtn.addEventListener('click', function() {
+
+        var totalHouses = deliveryPlaces.length;   // 全体の軒数
+        var deliveredHouses  = 0;                  // 配付済みの軒数
+
+        var totalItems = 0;                        // 💡総配布予定数
+        var deliveredItems = 0;                    // 💡実際に配り終えた配布数
+
+        
+        // 配送済み(true)の件数を数える
+        for (var i = 0; i < totalHouses; i++) {
+          var houseCount = deliveryPlaces[i][5]; // 6番目の「配布数」を取得
+          
+          
+          totalItems += houseCount;              // 総予定数を足し算
+ 	  
+
+          if (deliveryPlaces[i][4] === true) {
+            deliveredHouses++;
+	    deliveredItems += houseCount;
+
+          }
+        }
+        
+        // 集計結果をポップアップで表示
+        var resultMessage = "【現在の配付集計結果】\n\n" +
+                            "■ 軒数ベース\n" +
+                            "・全体： " + totalHouses + " 軒\n" +
+                            "・配付済み： " + deliveredHouses + " 軒\n" +
+                            "・未配付： " + (totalHouses - deliveredHouses) + " 軒\n\n" +
+                            "■ 配布数ベース\n" +
+                            "・総配布予定数： " + totalItems + " 部\n" +
+                            "・実際に配付済： " + deliveredItems + " 部\n" +
+                            "・残りの配布数： " + (totalItems - deliveredItems) + " 部";
+                            
+
+
+
+        alert(resultMessage);
+      });
+//--------------------------------------------------------------
+    });
+  </script>
+</body>
+</html>
